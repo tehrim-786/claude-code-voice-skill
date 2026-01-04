@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Context Server for Claude Voice
+Context Server for Claude Code Voice
 Handles Vapi tool calls to provide live project context.
 """
 
@@ -16,7 +16,7 @@ def get_data_dir() -> Path:
     skill_dir = Path.home() / ".claude" / "skills" / "call" / "data"
     if skill_dir.exists():
         return skill_dir
-    return Path.home() / ".claude-voice"
+    return Path.home() / ".claude-code-voice"
 
 
 DATA_DIR = get_data_dir()

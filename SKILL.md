@@ -14,9 +14,9 @@ Voice conversations with Claude about your projects. Call a phone number to brai
 
 ## Setup
 
-1. Install: `pip install claude-voice` or symlink this to `~/.claude/skills/call`
-2. Run `claude-voice setup` to configure Vapi credentials
-3. Register projects with `claude-voice register`
+1. Install: `pip install claude-code-voice` or symlink this to `~/.claude/skills/call`
+2. Run `claude-code-voice setup` to configure Vapi credentials
+3. Register projects with `claude-code-voice register`
 
 ## How It Works
 
@@ -34,7 +34,7 @@ For live file reading during calls:
 
 ```bash
 # Terminal 1
-claude-voice server
+claude-code-voice server
 
 # Terminal 2
 npx localtunnel --port 8765

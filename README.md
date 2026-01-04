@@ -1,4 +1,4 @@
-# Claude Voice
+# Claude Code Voice
 
 Talk to Claude about your projects over the phone.
 
@@ -15,17 +15,17 @@ A Claude Code skill that enables voice conversations about your codebase. Call a
 
 ```bash
 # 1. Install
-pip install claude-voice
+pip install claude-code-voice
 
 # 2. Configure (needs Vapi account)
-claude-voice setup
+claude-code-voice setup
 
 # 3. Register your project
 cd your-project
-claude-voice register
+claude-code-voice register
 
 # 4. Make a call
-claude-voice call "discuss the auth flow"
+claude-code-voice call "discuss the auth flow"
 ```
 
 ## Requirements
@@ -38,20 +38,20 @@ claude-voice call "discuss the auth flow"
 
 ### From PyPI (coming soon)
 ```bash
-pip install claude-voice
+pip install claude-code-voice
 ```
 
 ### From source
 ```bash
-git clone https://github.com/abracadabra50/claude-voice.git
-cd claude-voice
+git clone https://github.com/abracadabra50/claude-code-voice.git
+cd claude-code-voice
 pip install -e .
 ```
 
 ### As Claude Code Skill
 ```bash
 # Copy to skills directory
-cp -r claude-voice ~/.claude/skills/call
+cp -r claude-code-voice ~/.claude/skills/call
 
 # Or symlink
 ln -s $(pwd) ~/.claude/skills/call
@@ -75,7 +75,7 @@ ln -s $(pwd) ~/.claude/skills/call
 ### First-time Setup
 
 ```bash
-claude-voice setup
+claude-code-voice setup
 ```
 
 You'll need:
@@ -87,7 +87,7 @@ You'll need:
 
 ```bash
 cd ~/my-project
-claude-voice register
+claude-code-voice register
 ```
 
 This captures:
@@ -101,11 +101,11 @@ This captures:
 
 ```bash
 # General check-in
-claude-voice call
+claude-code-voice call
 
 # Specific topic
-claude-voice call "brainstorm the new feature"
-claude-voice call "debug the auth issue"
+claude-code-voice call "brainstorm the new feature"
+claude-code-voice call "debug the auth issue"
 ```
 
 ### With Claude Code
@@ -125,7 +125,7 @@ For live file reading and code search during calls:
 
 ```bash
 # Terminal 1: Start server
-claude-voice server
+claude-code-voice server
 
 # Terminal 2: Expose with tunnel (pick one)
 npx localtunnel --port 8765
@@ -137,7 +137,7 @@ Then update your config with the tunnel URL.
 
 ## Configuration
 
-Config stored in `~/.claude-voice/config.json`:
+Config stored in `~/.claude-code-voice/config.json`:
 
 ```json
 {

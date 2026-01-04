@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Claude Voice CLI
+Claude Code Voice CLI
 Talk to Claude about your projects over the phone.
 """
 
@@ -20,14 +20,14 @@ except ImportError:
     print("Run: pip install requests")
     sys.exit(1)
 
-# Config paths - use ~/.claude-voice for standalone, ~/.claude/skills/call for skill mode
+# Config paths - use ~/.claude-code-voice for standalone, ~/.claude/skills/call for skill mode
 def get_data_dir() -> Path:
     """Get the data directory, checking for skill mode first."""
     skill_dir = Path.home() / ".claude" / "skills" / "call" / "data"
     if skill_dir.exists():
         return skill_dir
 
-    data_dir = Path.home() / ".claude-voice"
+    data_dir = Path.home() / ".claude-code-voice"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 
