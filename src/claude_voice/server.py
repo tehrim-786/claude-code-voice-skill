@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 Context Server for Claude Code Voice
-Handles Vapi tool calls to provide live project context.
+Handles Vapi webhooks: tool calls, inbound calls, and call completion.
 """
 
 import json
 import subprocess
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime
 import argparse
 
 
@@ -21,6 +22,26 @@ def get_data_dir() -> Path:
 
 DATA_DIR = get_data_dir()
 PROJECTS_DIR = DATA_DIR / "projects"
+TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
+CONFIG_FILE = DATA_DIR / "config.json"
+
+
+def load_config() -> dict:
+    """Load configuration."""
+    if CONFIG_FILE.exists():
+        return json.loads(CONFIG_FILE.read_text())
+    return {}
+
+
+def save_config(config: dict):
+    """Save configuration."""
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+
+def ensure_dirs():
+    """Ensure directories exist."""
+    TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_project(name: str) -> dict:
@@ -141,6 +162,218 @@ def search_code(project_name: str, query: str) -> dict:
         return {"error": f"Search failed: {str(e)}"}
 
 
+def build_system_prompt(project: dict, topic: str = "general discussion") -> str:
+    """Build rich system prompt for voice assistant."""
+    context = project.get("context", {})
+
+    return f"""You are Claude, a technical co-pilot having a phone conversation with a developer.
+
+PERSONALITY:
+- Warm, friendly, conversational - like a colleague on a call
+- Keep responses SHORT - 1-2 sentences usually. This is voice, not text.
+- Technical but explains in plain language when needed
+- Proactive - suggest ideas, spot issues, help brainstorm
+
+PROJECT: {project.get('name', 'Unknown')}
+Type: {context.get('project_type', 'Unknown')}
+Description: {context.get('description', 'No description')}
+Path: {project.get('path', '')}
+
+GIT STATUS:
+{context.get('git_summary', 'No git info')}
+Recent commits: {chr(10).join(context.get('recent_commits', ['No recent commits'])[:5])}
+
+CURRENT TODOS:
+{chr(10).join(['- ' + t for t in context.get('todos', ['No todos'])][:10]) or 'No todos'}
+
+RECENT FILES:
+{chr(10).join(context.get('recent_files', ['No files tracked'])[:10])}
+
+DISCUSSION TOPIC: {topic}
+
+You have tools available to:
+- list_projects: See all registered projects
+- get_project_context: Get fresh context for any project
+- read_file: Read a specific file (summarize for voice)
+- search_code: Search for code patterns
+
+Use tools when you need LIVE data. The context above is a snapshot.
+Keep responses brief and conversational. Ask clarifying questions. Help brainstorm."""
+
+
+def get_most_recent_project() -> dict:
+    """Get the most recently updated project."""
+    projects = []
+    for f in PROJECTS_DIR.glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+            projects.append((data.get("last_context_update", ""), data))
+        except:
+            pass
+
+    if projects:
+        projects.sort(key=lambda x: x[0], reverse=True)
+        return projects[0][1]
+    return None
+
+
+def handle_assistant_request(data: dict) -> dict:
+    """Handle inbound call - return assistant config based on caller."""
+    message = data.get("message", {})
+    call = message.get("call", {})
+    caller_phone = call.get("customer", {}).get("number", "")
+
+    print(f"[INBOUND] Call from: {caller_phone}")
+
+    config = load_config()
+
+    # Check if caller is recognized
+    users = config.get("users", {})
+    user = users.get(caller_phone)
+
+    # Fallback: check if it's the main configured user
+    if not user and config.get("user_phone") == caller_phone:
+        user = {"name": "there", "last_project": None}
+
+    if not user:
+        print(f"[INBOUND] Unknown caller: {caller_phone}")
+        return {
+            "assistant": {
+                "model": {
+                    "provider": "anthropic",
+                    "model": "claude-opus-4-5-20251101",
+                    "temperature": 0.7
+                },
+                "voice": {"provider": "openai", "voiceId": "alloy"},
+                "firstMessage": "Hey! I don't recognize this number. If you've set up Claude Voice, make sure you're calling from your registered phone number."
+            }
+        }
+
+    # Load their project
+    project_name = user.get("last_project")
+    project = None
+
+    if project_name:
+        project = load_project(project_name)
+
+    if not project:
+        project = get_most_recent_project()
+
+    if not project:
+        return {
+            "assistant": {
+                "model": {
+                    "provider": "anthropic",
+                    "model": "claude-opus-4-5-20251101",
+                    "temperature": 0.7
+                },
+                "voice": {"provider": "openai", "voiceId": "alloy"},
+                "firstMessage": f"Hey {user.get('name', 'there')}! I don't see any projects registered yet. Run 'claude-code-voice register' in a project directory first."
+            }
+        }
+
+    print(f"[INBOUND] Loading project: {project.get('name')}")
+
+    # Update user's last_project for transcript saving
+    if caller_phone and project:
+        users = config.get("users", {})
+        if caller_phone in users:
+            users[caller_phone]["last_project"] = project.get("name")
+            config["users"] = users
+            save_config(config)
+
+    system_prompt = build_system_prompt(project, "inbound call")
+
+    assistant_config = {
+        "model": {
+            "provider": "anthropic",
+            "model": "claude-opus-4-5-20251101",
+            "temperature": 0.7,
+            "messages": [{"role": "system", "content": system_prompt}]
+        },
+        "voice": {"provider": "openai", "voiceId": "alloy"},
+        "firstMessage": f"Hey {user.get('name', 'there')}! I've got {project.get('name')} loaded up. What's on your mind?"
+    }
+
+    # Add tools if configured
+    tool_ids = list(config.get("tool_ids", {}).values())
+    if tool_ids:
+        assistant_config["model"]["toolIds"] = tool_ids
+
+    return {"assistant": assistant_config}
+
+
+def handle_end_of_call_report(data: dict) -> dict:
+    """Handle call completion - auto-save transcript."""
+    ensure_dirs()
+
+    message = data.get("message", {})
+    call = message.get("call", {})  # call is inside message
+
+    transcript = message.get("transcript", "")
+    summary = message.get("analysis", {}).get("summary", "") if message.get("analysis") else ""
+    call_id = call.get("id", "unknown")
+    duration = call.get("duration", 0)
+    call_type = "Inbound" if call.get("type") == "inboundPhoneCall" else "Outbound"
+
+    # Get project from metadata or default
+    metadata = call.get("metadata", {})
+    project_name = metadata.get("project")
+    topic = metadata.get("topic", "general")
+
+    # For inbound calls, try to get project from caller's config
+    if not project_name and call_type == "Inbound":
+        caller_phone = call.get("customer", {}).get("number", "")
+        if caller_phone:
+            config = load_config()
+            user = config.get("users", {}).get(caller_phone)
+            if user and user.get("last_project"):
+                project_name = user.get("last_project")
+            else:
+                # Fall back to most recent project
+                recent = get_most_recent_project()
+                if recent:
+                    project_name = recent.get("name")
+
+    if not project_name:
+        project_name = "unknown"
+
+    print(f"[AUTO-SYNC] Call ended: {call_id[:8]}... ({call_type}, {duration}s)")
+
+    if not transcript:
+        print(f"[AUTO-SYNC] No transcript available")
+        return {"status": "ok", "message": "no transcript"}
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{timestamp}_{project_name}.md"
+    filepath = TRANSCRIPTS_DIR / filename
+
+    content = f"""# Call Transcript: {project_name}
+
+**Date**: {datetime.now().isoformat()}
+**Topic**: {topic}
+**Duration**: {duration} seconds
+**Type**: {call_type}
+**Call ID**: {call_id}
+
+## Transcript
+
+{transcript}
+
+## Summary
+
+{summary if summary else 'No summary available'}
+
+---
+*Auto-synced by Claude Voice*
+"""
+
+    filepath.write_text(content)
+    print(f"[AUTO-SYNC] Saved: {filepath}")
+
+    return {"status": "ok", "transcript_path": str(filepath)}
+
+
 class VapiHandler(BaseHTTPRequestHandler):
     """Handle Vapi webhook requests."""
 
@@ -166,8 +399,20 @@ class VapiHandler(BaseHTTPRequestHandler):
         print(f"[VAPI] Request: {json.dumps(data, indent=2)[:500]}")
 
         message = data.get("message", {})
+        message_type = message.get("type")
 
-        if message.get("type") == "tool-calls":
+        # Route based on message type
+        if message_type == "assistant-request":
+            response = handle_assistant_request(data)
+            self.send_json(response)
+            return
+
+        if message_type == "end-of-call-report":
+            response = handle_end_of_call_report(data)
+            self.send_json(response)
+            return
+
+        if message_type == "tool-calls":
             tool_calls = message.get("toolCalls", [])
             results = []
 

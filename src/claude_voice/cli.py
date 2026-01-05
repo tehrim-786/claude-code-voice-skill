@@ -106,7 +106,16 @@ def vapi_request(method: str, endpoint: str, data: dict = None) -> dict:
 
 def cmd_setup(args):
     """Configure Vapi credentials and phone number."""
-    print("=== Claude Voice Setup ===\n")
+    print("=" * 50)
+    print("  Claude Voice Setup")
+    print("=" * 50)
+    print()
+    print("Before you start, you'll need:")
+    print("  1. Vapi account: https://vapi.ai (free to sign up)")
+    print("  2. Vapi API key: https://dashboard.vapi.ai/api-keys")
+    print("  3. Vapi phone number: https://dashboard.vapi.ai/phone-numbers")
+    print("     (Click 'Buy Number' - costs ~$2/month)")
+    print()
 
     config = load_config()
 
@@ -114,7 +123,6 @@ def cmd_setup(args):
     if args.api_key:
         api_key = args.api_key
     else:
-        print("Get your Vapi API key from: https://dashboard.vapi.ai")
         api_key = input("Vapi API Key: ").strip()
 
     if not api_key:
@@ -133,6 +141,23 @@ def cmd_setup(args):
         phone = "+" + phone
 
     config["user_phone"] = phone
+
+    # Get user's name (optional)
+    if args.name:
+        user_name = args.name
+    else:
+        user_name = input("Your name (for personalized greetings, or press Enter to skip): ").strip()
+
+    if not user_name:
+        user_name = "there"  # Fallback for "Hey there!"
+
+    config["user_name"] = user_name
+
+    # Also add to users dict for inbound call recognition
+    if "users" not in config:
+        config["users"] = {}
+    config["users"][phone] = {"name": user_name, "last_project": None}
+
     save_config(config)
     print(f"\n✅ Config saved to {CONFIG_FILE}")
 
@@ -175,12 +200,19 @@ def cmd_setup(args):
     except Exception as e:
         print(f"⚠️  Could not create tools: {e}")
 
-    print("\n=== Setup Complete ===")
-    print(f"Your phone: {config.get('user_phone', 'Not set')}")
-    print(f"Vapi number: {config.get('vapi_phone_number', 'Not set')}")
+    print("\n" + "=" * 50)
+    print("  Setup Complete!")
+    print("=" * 50)
+    print(f"\n  Your name:   {config.get('user_name', 'Not set')}")
+    print(f"  Your phone:  {config.get('user_phone', 'Not set')}")
+    print(f"  Vapi number: {config.get('vapi_phone_number', 'Not set')}")
     print("\nNext steps:")
-    print("  1. Run 'claude-code-voice register' in a project directory")
-    print("  2. Run 'claude-code-voice call' to have Claude call you")
+    print("  1. cd into a project directory")
+    print("  2. Run: claude-code-voice register")
+    print("  3. Run: claude-code-voice start")
+    print("\nThen you can:")
+    print("  - Have Claude call you: claude-code-voice call")
+    print(f"  - Call Claude: dial {config.get('vapi_phone_number', 'your Vapi number')}")
 
 
 def create_tools(config: dict) -> dict:
@@ -506,7 +538,7 @@ Keep responses brief and conversational. Ask clarifying questions. Help brainsto
     assistant_config = {
         "model": {
             "provider": "anthropic",
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-opus-4-5-20251101",
             "temperature": 0.7,
             "messages": [{"role": "system", "content": system_prompt}],
         },
@@ -527,7 +559,11 @@ Keep responses brief and conversational. Ask clarifying questions. Help brainsto
     call_data = {
         "phoneNumberId": config["vapi_phone_number_id"],
         "customer": {"number": config["user_phone"]},
-        "assistant": assistant_config
+        "assistant": assistant_config,
+        "metadata": {
+            "project": project["name"],
+            "topic": topic
+        }
     }
 
     try:
@@ -748,6 +784,131 @@ def cmd_server(args):
     server_main(args)
 
 
+def cmd_start(args):
+    """Start server + tunnel and configure everything automatically."""
+    import time
+    import signal
+    import re
+
+    config = load_config()
+
+    if not config.get("vapi_api_key"):
+        print("ERROR: Run 'claude-code-voice setup' first")
+        sys.exit(1)
+
+    port = args.port
+
+    print("🚀 Starting Claude Voice...")
+    print(f"   Port: {port}")
+
+    # Kill any existing processes on the port
+    try:
+        subprocess.run(f"lsof -ti:{port} | xargs kill -9 2>/dev/null", shell=True, capture_output=True)
+        time.sleep(1)
+    except:
+        pass
+
+    # Start server in background
+    print("\n📡 Starting context server...")
+    server_proc = subprocess.Popen(
+        [sys.executable, "-m", "claude_voice.server", "--port", str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT
+    )
+    time.sleep(2)
+
+    if server_proc.poll() is not None:
+        print("❌ Server failed to start")
+        sys.exit(1)
+    print(f"   ✅ Server running on port {port}")
+
+    # Start tunnel
+    print("\n🌐 Starting tunnel...")
+    tunnel_proc = subprocess.Popen(
+        ["npx", "localtunnel", "--port", str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+
+    # Wait for tunnel URL
+    tunnel_url = None
+    for _ in range(30):  # 30 second timeout
+        line = tunnel_proc.stdout.readline()
+        if "your url is:" in line.lower():
+            match = re.search(r'https://[^\s]+', line)
+            if match:
+                tunnel_url = match.group(0)
+                break
+        time.sleep(0.5)
+
+    if not tunnel_url:
+        print("❌ Tunnel failed to start")
+        server_proc.terminate()
+        sys.exit(1)
+
+    print(f"   ✅ Tunnel: {tunnel_url}")
+
+    # Configure server URL
+    print("\n⚙️  Configuring Vapi...")
+    config["server_url"] = tunnel_url
+    save_config(config)
+
+    # Update tools
+    tool_ids = config.get("tool_ids", {})
+    if tool_ids:
+        updated = 0
+        for tool_name, tool_id in tool_ids.items():
+            try:
+                vapi_request("PATCH", f"/tool/{tool_id}", {"server": {"url": tunnel_url}})
+                updated += 1
+            except:
+                pass
+        print(f"   ✅ Updated {updated} tools")
+
+    # Configure inbound calls
+    phone_id = config.get("vapi_phone_number_id")
+    if phone_id:
+        try:
+            vapi_request("PATCH", f"/phone-number/{phone_id}", {
+                "serverUrl": tunnel_url,
+                "assistantId": None
+            })
+            print(f"   ✅ Inbound calls configured")
+        except Exception as e:
+            print(f"   ⚠️  Could not configure inbound: {e}")
+
+    # Summary
+    print("\n" + "=" * 50)
+    print("✅ Claude Voice is ready!")
+    print("=" * 50)
+    print(f"\n📞 Outbound: Run 'claude-code-voice call' to have Claude call you")
+    print(f"📲 Inbound:  Call {config.get('vapi_phone_number', 'your Vapi number')}")
+    print(f"\n💡 Keep this terminal open to receive calls")
+    print("   Press Ctrl+C to stop\n")
+
+    # Handle Ctrl+C gracefully
+    def cleanup(sig, frame):
+        print("\n\n👋 Shutting down...")
+        server_proc.terminate()
+        tunnel_proc.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, cleanup)
+
+    # Keep running and show logs
+    try:
+        while True:
+            # Read from server
+            if server_proc.stdout:
+                line = server_proc.stdout.readline()
+                if line:
+                    print(line.decode().strip())
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        cleanup(None, None)
+
+
 def cmd_config(args):
     """Set or get configuration values."""
     config = load_config()
@@ -788,6 +949,35 @@ def cmd_config(args):
                 print("\nTo set it, run your context server and tunnel, then:")
                 print("  claude-code-voice config server-url https://your-tunnel-url.loca.lt")
 
+    elif args.key == "name":
+        if args.value:
+            # Setting name
+            name = args.value.strip()
+            config["user_name"] = name
+
+            # Also update in users dict
+            user_phone = config.get("user_phone")
+            if user_phone:
+                if "users" not in config:
+                    config["users"] = {}
+                if user_phone in config["users"]:
+                    config["users"][user_phone]["name"] = name
+                else:
+                    config["users"][user_phone] = {"name": name, "last_project": None}
+
+            save_config(config)
+            print(f"✅ name = {name}")
+            print(f"\nClaude will now greet you as: \"Hey {name}!\"")
+        else:
+            # Getting name
+            name = config.get("user_name", "")
+            if name:
+                print(f"name = {name}")
+            else:
+                print("name is not set")
+                print("\nTo set it, run:")
+                print("  claude-code-voice config name YourName")
+
     elif args.key == "show":
         print("=== Configuration ===\n")
         for key, value in config.items():
@@ -799,14 +989,77 @@ def cmd_config(args):
         print(f"Unknown config key: {args.key}")
         print("\nAvailable keys:")
         print("  server-url  - URL of your context server (e.g., localtunnel URL)")
+        print("  name        - Your name for personalized greetings")
         print("  show        - Show all configuration values")
+
+
+# ============================================================================
+# CONFIGURE INBOUND COMMAND
+# ============================================================================
+
+def cmd_configure_inbound(args):
+    """Configure Vapi phone number for inbound calls."""
+    config = load_config()
+
+    if not config.get("vapi_api_key"):
+        print("ERROR: Run 'claude-code-voice setup' first")
+        sys.exit(1)
+
+    if not config.get("vapi_phone_number_id"):
+        print("ERROR: No Vapi phone number configured. Run 'claude-code-voice setup'")
+        sys.exit(1)
+
+    server_url = config.get("server_url")
+    if not server_url:
+        print("ERROR: Server URL not configured")
+        print("\nFor inbound calls, you need to run your context server and tunnel:")
+        print("  1. Terminal 1: claude-code-voice server")
+        print("  2. Terminal 2: npx localtunnel --port 8765")
+        print("  3. Then run: claude-code-voice config server-url <your-tunnel-url>")
+        print("  4. Finally run: claude-code-voice configure-inbound")
+        sys.exit(1)
+
+    print("=== Configuring Inbound Calls ===\n")
+
+    phone_id = config["vapi_phone_number_id"]
+    phone_number = config.get("vapi_phone_number", "Unknown")
+
+    print(f"Phone: {phone_number}")
+    print(f"Server URL: {server_url}")
+
+    # PATCH the phone number to use server URL for inbound
+    try:
+        vapi_request("PATCH", f"/phone-number/{phone_id}", {
+            "serverUrl": server_url,
+            "assistantId": None  # Clear any fixed assistant - we use dynamic
+        })
+        print(f"\n✅ Inbound calls configured!")
+        print(f"\nWhen someone calls {phone_number}, Vapi will:")
+        print(f"  1. Send assistant-request webhook to {server_url}")
+        print(f"  2. Your server returns dynamic assistant based on caller")
+        print(f"  3. Claude answers with caller's project context")
+    except Exception as e:
+        print(f"❌ Failed to configure: {e}")
+        sys.exit(1)
+
+    # Ensure user is registered
+    user_phone = config.get("user_phone")
+    if user_phone:
+        users = config.get("users", {})
+        if user_phone not in users:
+            users[user_phone] = {"name": "User", "last_project": None}
+            config["users"] = users
+            save_config(config)
+            print(f"\n📱 Registered {user_phone} for caller recognition")
+
+    print(f"\nNOTE: Keep your server + tunnel running to receive inbound calls!")
 
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
-COMMANDS = {"setup", "register", "call", "sync", "history", "list", "status", "server", "config"}
+COMMANDS = {"setup", "register", "call", "sync", "history", "list", "status", "server", "start", "config", "configure-inbound"}
 
 
 def main():
@@ -826,6 +1079,7 @@ def main():
     setup_parser = subparsers.add_parser("setup", help="Configure Vapi credentials")
     setup_parser.add_argument("--api-key", help="Vapi API key")
     setup_parser.add_argument("--phone", help="Your phone number")
+    setup_parser.add_argument("--name", help="Your name (for personalized greetings)")
 
     # Register
     register_parser = subparsers.add_parser("register", help="Register current project")
@@ -852,10 +1106,17 @@ def main():
     server_parser = subparsers.add_parser("server", help="Start context server")
     server_parser.add_argument("--port", type=int, default=8765)
 
+    # Start (all-in-one)
+    start_parser = subparsers.add_parser("start", help="Start server + tunnel (easy mode)")
+    start_parser.add_argument("--port", type=int, default=8765)
+
     # Config
     config_parser = subparsers.add_parser("config", help="Set or get configuration values")
     config_parser.add_argument("key", help="Config key (server-url, show)")
     config_parser.add_argument("value", nargs="?", help="Value to set (omit to get current value)")
+
+    # Configure Inbound
+    subparsers.add_parser("configure-inbound", help="Configure phone number for inbound calls")
 
     args = parser.parse_args()
 
@@ -878,8 +1139,12 @@ def main():
         cmd_status(args)
     elif args.command == "server":
         cmd_server(args)
+    elif args.command == "start":
+        cmd_start(args)
     elif args.command == "config":
         cmd_config(args)
+    elif args.command == "configure-inbound":
+        cmd_configure_inbound(args)
     else:
         # No command = make a call
         class FakeArgs:
